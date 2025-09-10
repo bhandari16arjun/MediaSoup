@@ -269,7 +269,7 @@ const Meeting = () => {
                 Participants ({participants.length})
               </h3>
               
-              <div className="space-y-3">
+              <div className="space-y-3 max-h-[calc(100vh-300px)] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-border dark:scrollbar-thumb-video-border scrollbar-track-transparent">
                 {participants.map((participant) => (
                   <div key={participant.id} className="flex items-center justify-between p-4 bg-muted dark:bg-meeting-controls rounded-xl border border-border dark:border-video-border hover:shadow-md transition-all duration-200">
                     <div className="flex items-center gap-3">
