@@ -43,13 +43,6 @@ const Meeting = () => {
   const [showChat, setShowChat] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   
-  // Local video preview state for screen sharing
-  const [videoPosition, setVideoPosition] = useState({ x: 24, y: 24 });
-  const [videoSize, setVideoSize] = useState({ width: 256, height: 144 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [isResizing, setIsResizing] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  
   // Mock participants data
   const [participants, setParticipants] = useState<Participant[]>([
     { id: "local", name: "You", isAudioMuted: false, isVideoOff: false, isLocal: true, isSpeaking: false },
@@ -102,66 +95,6 @@ const Meeting = () => {
     });
   };
 
-  // Handle dragging
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (isResizing) return;
-    setIsDragging(true);
-    const rect = e.currentTarget.getBoundingClientRect();
-    setDragOffset({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
-    });
-  };
-
-  const handleMouseMove = (e: MouseEvent) => {
-    if (isDragging && !isResizing) {
-      const newX = e.clientX - dragOffset.x;
-      const newY = e.clientY - dragOffset.y;
-      
-      // Keep within screen bounds
-      const maxX = window.innerWidth - videoSize.width;
-      const maxY = window.innerHeight - videoSize.height - 120; // Account for footer
-      
-      setVideoPosition({
-        x: Math.max(0, Math.min(newX, maxX)),
-        y: Math.max(0, Math.min(newY, maxY))
-      });
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-    setIsResizing(false);
-  };
-
-  // Handle resizing
-  const handleResizeMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setIsResizing(true);
-  };
-
-  const handleResizeMove = (e: MouseEvent) => {
-    if (isResizing) {
-      const newWidth = Math.max(200, Math.min(400, e.clientX - videoPosition.x));
-      const newHeight = Math.max(112, Math.min(225, e.clientY - videoPosition.y));
-      
-      setVideoSize({ width: newWidth, height: newHeight });
-    }
-  };
-
-  useEffect(() => {
-    if (isDragging || isResizing) {
-      const moveHandler = isDragging ? handleMouseMove : handleResizeMove;
-      document.addEventListener('mousemove', moveHandler);
-      document.addEventListener('mouseup', handleMouseUp);
-      
-      return () => {
-        document.removeEventListener('mousemove', moveHandler);
-        document.removeEventListener('mouseup', handleMouseUp);
-      };
-    }
-  }, [isDragging, isResizing, dragOffset, videoPosition, videoSize]);
-
   return (
     <div className="h-screen bg-background flex flex-col transition-colors duration-300">
       {/* Header */}
@@ -208,7 +141,7 @@ const Meeting = () => {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex relative pb-32">
+      <div className="flex-1 flex relative">
         {/* Video Grid or Screen Share */}
         <div className="flex-1 p-6">
           {isScreenSharing ? (
@@ -232,17 +165,8 @@ const Meeting = () => {
                 </div>
               </Card>
               
-              {/* Local Video Preview - Draggable and Resizable */}
-              <Card 
-                className="absolute bg-card border-border overflow-hidden shadow-2xl cursor-move select-none hover:shadow-3xl transition-shadow duration-200"
-                style={{ 
-                  left: videoPosition.x, 
-                  top: videoPosition.y, 
-                  width: videoSize.width, 
-                  height: videoSize.height 
-                }}
-                onMouseDown={handleMouseDown}
-              >
+              {/* Local Video Preview - Bottom Right */}
+              <Card className="absolute bottom-6 right-6 w-64 h-36 bg-card border-border overflow-hidden shadow-2xl">
                 <div className="h-full bg-gradient-to-br from-primary/20 to-primary-glow/20 flex items-center justify-center relative">
                   {isVideoOff ? (
                     <div className="w-12 h-12 bg-primary rounded-full flex items-center justify-center">
@@ -266,14 +190,6 @@ const Meeting = () => {
                     <span className="text-white text-xs bg-black/50 px-1 py-0.5 rounded">
                       You
                     </span>
-                  </div>
-                  
-                  {/* Resize handle */}
-                  <div 
-                    className="absolute bottom-0 right-0 w-4 h-4 bg-primary/20 cursor-se-resize"
-                    onMouseDown={handleResizeMouseDown}
-                  >
-                    <div className="absolute bottom-1 right-1 w-2 h-2 border-r-2 border-b-2 border-white/50" />
                   </div>
                 </div>
               </Card>
@@ -397,8 +313,8 @@ const Meeting = () => {
         )}
       </div>
 
-      {/* Meeting Controls - Fixed at bottom */}
-      <div className="fixed bottom-0 left-0 right-0 bg-card border-t border-border px-6 py-6 backdrop-blur-sm bg-opacity-90 z-50">
+      {/* Meeting Controls */}
+      <div className="bg-card border-t border-border px-6 py-6 backdrop-blur-sm bg-opacity-90">
         <div className="flex items-center justify-center gap-4">
           <Button
             variant={isAudioMuted ? "destructive" : "secondary"}
