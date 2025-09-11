@@ -55,9 +55,9 @@ const Meeting = () => {
     { id: "7", name: "David Lee", isAudioMuted: false, isVideoOff: false, isLocal: false, isSpeaking: false },
   ]);
 
-  // Get dominant speakers (local user + top 7 others)
-  const dominantSpeakers = participants.filter(p => p.isLocal || participants.indexOf(p) < 8).slice(0, 8);
-  const otherParticipants = participants.filter(p => !p.isLocal && participants.indexOf(p) >= 7);
+  // Get dominant speakers (local user + top 5 others) - max 6 total
+  const dominantSpeakers = participants.filter(p => p.isLocal || participants.indexOf(p) < 6).slice(0, 6);
+  const otherParticipants = participants.filter(p => !p.isLocal && participants.indexOf(p) >= 5);
 
   const copyRoomId = () => {
     navigator.clipboard.writeText(roomId);
@@ -196,7 +196,7 @@ const Meeting = () => {
             </div>
           ) : (
             /* Normal Participant Grid */
-            <div className="grid grid-cols-4 gap-4 h-full">
+            <div className="grid grid-cols-3 gap-4 h-full">
               {dominantSpeakers.map((participant) => (
                 <Card key={participant.id} className="bg-card border-border relative overflow-hidden group hover:shadow-lg transition-all duration-300">
                   <div className="aspect-video bg-muted/20 flex items-center justify-center relative">
