@@ -9,6 +9,7 @@ export const useMediasoup = () => {
 
     const [localStream, setLocalStream] = useState(null);
     const [remoteStreams, setRemoteStreams] = useState({});
+    const [isInitialized, setIsInitialized] = useState(false);
     
     const localAudioTrackRef = useRef(null);
     const localVideoTrackRef = useRef(null); 
@@ -18,6 +19,19 @@ export const useMediasoup = () => {
     const audioProducerRef = useRef(null);
     const videoProducerRef = useRef(null);
     const consumerTransportsRef = useRef({});
+
+    // Get user info
+    const getUserInfo = useCallback(() => {
+        const adminInfo = localStorage.getItem('meetingAdmin');
+        const userInfo = localStorage.getItem('meetingUser');
+        
+        if (adminInfo) {
+            return JSON.parse(adminInfo);
+        } else if (userInfo) {
+            return JSON.parse(userInfo);
+        }
+        return null;
+    }, []);
 
     const produce = useCallback(async (stream) => {
         if (!deviceRef.current || !socket) return;
@@ -42,9 +56,15 @@ export const useMediasoup = () => {
                 } catch (e) { errback(e); }
             });
 
-            if (stream.getAudioTracks()[0]) audioProducerRef.current = await transport.produce({ track: stream.getAudioTracks()[0] });
-            if (stream.getVideoTracks()[0]) videoProducerRef.current = await transport.produce({ track: stream.getVideoTracks()[0] });
-        } catch (error) { console.error("Error in produce():", error); }
+            if (stream.getAudioTracks()[0]) {
+                audioProducerRef.current = await transport.produce({ track: stream.getAudioTracks()[0] });
+            }
+            if (stream.getVideoTracks()[0]) {
+                videoProducerRef.current = await transport.produce({ track: stream.getVideoTracks()[0] });
+            }
+        } catch (error) { 
+            console.error("Error in produce():", error); 
+        }
     }, [socket]);
 
     const consume = useCallback(async (producerId, userName, remotePeerSocketId) => {
@@ -86,30 +106,83 @@ export const useMediasoup = () => {
                     }
                 };
             });
-        } catch (error) { console.error("Error in consume():", error); }
+        } catch (error) { 
+            console.error("Error in consume():", error); 
+        }
     }, [socket]);
     
     useEffect(() => {
         const init = async () => {
             try {
+                const userInfo = getUserInfo();
+                if (!userInfo || !socket || !roomId) return;
+
+                console.log("🚀 Initializing MediaSoup for:", userInfo.userName, "Admin:", userInfo.isAdmin);
+
+                // Get user media
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 localAudioTrackRef.current = stream.getAudioTracks()[0];
                 localVideoTrackRef.current = stream.getVideoTracks()[0];
                 setLocalStream(stream);
-                const { routerRtpCapabilities, producersToConsume } = await socket.emitWithAck('joinRoom', { userName: `User-${socket.id.slice(0, 4)}`, roomName: roomId });
-                const device = new Device();
-                await device.load({ routerRtpCapabilities });
-                deviceRef.current = device;
-                await produce(stream);
-                for (const producer of producersToConsume) {
-                    await consume(producer.producerId, producer.userName, producer.remotePeerSocketId);
-                }
-            } catch (error) { console.error("Initialization Error:", error); }
-        };
-        if (socket && roomId) init();
 
-        const handleNewProducer = ({ producerId, userName, remotePeerSocketId }) => { consume(producerId, userName, remotePeerSocketId); };
+                // Join room
+                const joinResult = await socket.emitWithAck('joinRoom', { 
+                    userName: userInfo.userName, 
+                    roomName: roomId 
+                });
+
+                // Handle different join scenarios
+                if (joinResult.waitingForApproval) {
+                    console.log("⏳ Waiting for admin approval");
+                    return; // Don't initialize MediaSoup yet
+                }
+
+                if (joinResult.error) {
+                    console.error("❌ Join room error:", joinResult.error);
+                    return;
+                }
+
+                console.log("✅ Joined room successfully");
+
+                // Initialize MediaSoup device
+                const device = new Device();
+                await device.load({ routerRtpCapabilities: joinResult.routerRtpCapabilities });
+                deviceRef.current = device;
+
+                // Start producing
+                await produce(stream);
+
+                // Consume existing producers
+                if (joinResult.producersToConsume) {
+                    for (const producer of joinResult.producersToConsume) {
+                        await consume(producer.producerId, producer.userName, producer.remotePeerSocketId);
+                    }
+                }
+
+                setIsInitialized(true);
+                console.log("🎉 MediaSoup initialization complete");
+
+            } catch (error) { 
+                console.error("💥 Initialization Error:", error); 
+            }
+        };
+
+        if (socket && roomId && !isInitialized) {
+            init();
+        }
+    }, [socket, roomId, produce, consume, getUserInfo, isInitialized]);
+
+    // Socket event handlers
+    useEffect(() => {
+        if (!socket) return;
+
+        const handleNewProducer = ({ producerId, userName, remotePeerSocketId }) => { 
+            console.log("👥 New producer:", userName);
+            consume(producerId, userName, remotePeerSocketId); 
+        };
+
         const handleProducerClosed = ({ producerId }) => {
+            console.log("🚪 Producer closed:", producerId);
             setRemoteStreams(prev => {
                 const newState = { ...prev };
                 let peerIdToRemove = null;
@@ -135,18 +208,16 @@ export const useMediasoup = () => {
             });
         };
 
-        // --- THIS IS THE CORRECTED HANDLER ---
         const handleRemoteProducerState = ({ remotePeerSocketId, kind, paused }) => {
+            console.log("🔄 Remote producer state change:", remotePeerSocketId, kind, paused);
             setRemoteStreams(prev => {
                 const peerData = prev[remotePeerSocketId];
                 if (!peerData) return prev;
 
-                // Create a mutable copy to work with
                 const updatedPeerData = { ...peerData };
                 updatedPeerData.isVideoOff = kind === 'video' ? paused : peerData.isVideoOff;
                 updatedPeerData.isAudioMuted = kind === 'audio' ? paused : peerData.isAudioMuted;
                 
-                // If a video track state has changed, we MUST rebuild the combined stream
                 if (kind === 'video') {
                     const audioConsumer = updatedPeerData.consumers.get('audio');
                     const videoConsumer = updatedPeerData.consumers.get('video');
@@ -155,68 +226,135 @@ export const useMediasoup = () => {
                     if (audioConsumer) {
                         tracks.push(audioConsumer.track);
                     }
-                    // Only add the video track if it's not paused. The consumer's track
-                    // will be the NEW, LIVE track after a `replaceTrack` operation.
                     if (videoConsumer && !paused) {
                         tracks.push(videoConsumer.track);
                     }
                     
-                    // Create a BRAND NEW MediaStream object. This is the key to forcing React
-                    // to update the <video> element's srcObject.
                     updatedPeerData.combinedStream = new MediaStream(tracks);
                 }
                 
                 return { ...prev, [remotePeerSocketId]: updatedPeerData };
             });
         };
-        // --- END OF CORRECTION ---
+
+        // Handle approval for users
+        const handleJoinApproved = async ({ routerRtpCapabilities }) => {
+            console.log("✅ Join request approved, initializing MediaSoup...");
+            
+            try {
+                // Initialize device if not done already
+                if (!deviceRef.current) {
+                    const device = new Device();
+                    await device.load({ routerRtpCapabilities });
+                    deviceRef.current = device;
+                }
+
+                // Get media stream if not available
+                if (!localStream) {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    localAudioTrackRef.current = stream.getAudioTracks()[0];
+                    localVideoTrackRef.current = stream.getVideoTracks()[0];
+                    setLocalStream(stream);
+                    
+                    // Start producing
+                    await produce(stream);
+                } else {
+                    // Start producing with existing stream
+                    await produce(localStream);
+                }
+
+                setIsInitialized(true);
+                console.log("🎉 MediaSoup initialized after approval");
+
+            } catch (error) {
+                console.error("💥 Error initializing after approval:", error);
+            }
+        };
 
         socket.on('newProducer', handleNewProducer);
         socket.on('producerClosed', handleProducerClosed);
         socket.on('remoteProducerStateChanged', handleRemoteProducerState);
+        socket.on('joinApproved', handleJoinApproved);
 
         return () => {
             socket.off('newProducer', handleNewProducer);
             socket.off('producerClosed', handleProducerClosed);
             socket.off('remoteProducerStateChanged', handleRemoteProducerState);
+            socket.off('joinApproved', handleJoinApproved);
+        };
+    }, [socket, consume, produce, localStream]);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
             producerTransportRef.current?.close();
             Object.values(consumerTransportsRef.current).forEach(t => t.transport?.close());
             localStream?.getTracks().forEach(track => track.stop());
         };
-    }, [socket, roomId, produce, consume]);
+    }, [localStream]);
 
     const toggleAudio = useCallback(() => {
         if (!audioProducerRef.current) return false;
+        
         const isPaused = !audioProducerRef.current.paused;
-        if (isPaused) audioProducerRef.current.pause();
-        else audioProducerRef.current.resume();
-        socket.emit('producerStateChanged', { kind: 'audio', paused: isPaused });
+        
+        if (isPaused) {
+            audioProducerRef.current.pause();
+        } else {
+            audioProducerRef.current.resume();
+        }
+        
+        if (socket) {
+            socket.emit('producerStateChanged', { kind: 'audio', paused: isPaused });
+        }
+        
         return isPaused;
     }, [socket]);
 
     const toggleVideo = useCallback(async () => {
         if (!videoProducerRef.current) return false;
+        
         const isPaused = !videoProducerRef.current.paused;
 
-        if (isPaused) {
-            videoProducerRef.current.pause();
-            localVideoTrackRef.current?.stop();
-        } else {
-            const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
-            const newTrack = newStream.getVideoTracks()[0];
-            localVideoTrackRef.current = newTrack;
-            await videoProducerRef.current.replaceTrack({ track: newTrack });
-            videoProducerRef.current.resume();
+        try {
+            if (isPaused) {
+                // Pause video
+                videoProducerRef.current.pause();
+                localVideoTrackRef.current?.stop();
+            } else {
+                // Resume video - get new video stream
+                const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const newTrack = newStream.getVideoTracks()[0];
+                localVideoTrackRef.current = newTrack;
+                
+                // Replace track in producer
+                await videoProducerRef.current.replaceTrack({ track: newTrack });
+                videoProducerRef.current.resume();
+            }
+            
+            if (socket) {
+                socket.emit('producerStateChanged', { kind: 'video', paused: isPaused });
+            }
+            
+            // Update local stream
+            const newLocalStream = new MediaStream([localAudioTrackRef.current]);
+            if (!isPaused && localVideoTrackRef.current) {
+                newLocalStream.addTrack(localVideoTrackRef.current);
+            }
+            setLocalStream(newLocalStream);
+            
+            return isPaused;
+        } catch (error) {
+            console.error("Error toggling video:", error);
+            return videoProducerRef.current.paused;
         }
-        
-        socket.emit('producerStateChanged', { kind: 'video', paused: isPaused });
-        
-        const newLocalStream = new MediaStream([localAudioTrackRef.current]);
-        if (!isPaused && localVideoTrackRef.current) newLocalStream.addTrack(localVideoTrackRef.current);
-        setLocalStream(newLocalStream);
-        
-        return isPaused;
     }, [socket]);
 
-    return { localStream, remoteStreams, toggleAudio, toggleVideo };
+    return { 
+        localStream, 
+        remoteStreams, 
+        toggleAudio, 
+        toggleVideo,
+        isInitialized 
+    };
 };
