@@ -1,92 +1,73 @@
-const config = require('../config/config')
-const newDominantSpeaker = require('../utilities/newDominantSpeaker')
+// server/classes/Room.js
+const config = require('../config/config');
 
-class Room{
-    constructor(roomName, workerToUse){
-        this.roomName = roomName
-        this.worker = workerToUse
-        this.router = null
-        // All the Client objects that are in this room
-        this.clients = []
-        // Admin client reference
-        this.admin = null
-        // Pending join requests { id, userName, socket, timestamp }
-        this.pendingRequests = new Map()
-        // An array of id's with the most recent dominant speaker first
-        this.activeSpeakerList = []
-        // Request counter for unique IDs
-        this.requestCounter = 0
-    }
+class Room {
+  constructor(roomName, workerToUse) {
+    this.roomName = roomName;
+    this.worker = workerToUse;
+    this.router = null;
 
-    addClient(client){
-        this.clients.push(client)
-        // First client becomes admin
-        if (this.clients.length === 1) {
-            this.admin = client
-            client.isAdmin = true
-        }
-    }
+    // Map<socketId, Client>
+    this.clients = new Map();
 
-    removeClient(clientSocket){
-        this.clients = this.clients.filter(c => c.socket.id !== clientSocket.id)
-        
-        // If admin leaves, end the room or transfer admin to next person
-        if (this.admin && this.admin.socket.id === clientSocket.id) {
-            if (this.clients.length > 0) {
-                // Transfer admin to the next person
-                this.admin = this.clients[0]
-                this.admin.isAdmin = true
-            } else {
-                this.admin = null
-            }
-        }
-    }
+    this.admin = null;
 
-    addPendingRequest(userName, socket) {
-        const requestId = `req_${++this.requestCounter}_${Date.now()}`
-        const request = {
-            id: requestId,
-            userName,
-            socket,
-            timestamp: Date.now()
-        }
-        
-        this.pendingRequests.set(requestId, request)
-        return request
-    }
+    // Map<requestId, { id, userName, socketId, timestamp }>
+    this.pendingRequests = new Map();
 
-    removePendingRequest(requestId) {
-        return this.pendingRequests.delete(requestId)
-    }
+    this.activeSpeakerList = [];
+    this.requestCounter = 0;
+  }
 
-    getPendingRequest(requestId) {
-        return this.pendingRequests.get(requestId)
+  addClient(client) {
+    this.clients.set(client.socket.id, client);
+    if (!this.admin) {
+      this.admin = client;
+      client.isAdmin = true;
     }
+  }
 
-    getAllPendingRequests() {
-        return Array.from(this.pendingRequests.values())
+  removeClient(client) {
+    this.clients.delete(client.socket.id);
+    if (this.admin && this.admin.socket.id === client.socket.id) {
+      const next = this.clients.values().next().value || null;
+      this.admin = next || null;
+      if (this.admin) this.admin.isAdmin = true;
     }
+  }
 
-    isAdmin(clientSocket) {
-        return this.admin && this.admin.socket.id === clientSocket.id
-    }
+  addPendingRequest(userName, socketId) {
+    const requestId = `req_${++this.requestCounter}_${Date.now()}`;
+    const request = { id: requestId, userName, socketId, timestamp: Date.now() };
+    this.pendingRequests.set(requestId, request);
+    return request;
+  }
 
-    getAdminName() {
-        return this.admin ? this.admin.userName : null
-    }
+  removePendingRequest(requestId) {
+    return this.pendingRequests.delete(requestId);
+  }
 
-    createRouter(io){
-        return new Promise(async(resolve, reject)=>{
-            this.router = await this.worker.createRouter({
-                mediaCodecs: config.routerMediaCodecs
-            })
-            this.activeSpeakerObserver = await this.router.createActiveSpeakerObserver({
-                interval: 300 // 300 is default
-            })
-            this.activeSpeakerObserver.on('dominantspeaker', ds => newDominantSpeaker(ds, this, io))
-            resolve()
-        })
-    }
+  getPendingRequest(requestId) {
+    return this.pendingRequests.get(requestId);
+  }
+
+  getAllPendingRequests() {
+    return Array.from(this.pendingRequests.values());
+  }
+
+  isAdminSocket(socketId) {
+    return this.admin && this.admin.socket.id === socketId;
+  }
+
+  getAdminName() {
+    return this.admin ? this.admin.userName : null;
+  }
+
+  async createRouter() {
+    this.router = await this.worker.createRouter({
+      mediaCodecs: config.routerMediaCodecs,
+    });
+  }
 }
 
-module.exports = Room
+module.exports = Room;
